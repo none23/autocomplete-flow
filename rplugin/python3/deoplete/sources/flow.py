@@ -2,9 +2,14 @@
 # coding: utf-8
 
 import os
+import re
 from .base import Base
 
 CONFIG_FILE = '.flowconfig'
+
+import_re = r'=?\s*require\(["\'"][@?\w\./-]*$|\s+from\s+["\'][@?\w\./-]*$'
+import_pattern = re.compile(import_re)
+
 
 # Find closest configuration directory recursively.
 # Borrows from https://github.com/steelsojka/deoplete-flow/pull/9/files
@@ -16,6 +21,7 @@ def find_config_dir(dir):
     else:
         return find_config_dir(os.path.dirname(dir))
 
+
 class Source(Base):
     def __init__(self, vim):
         Base.__init__(self, vim)
@@ -24,7 +30,8 @@ class Source(Base):
         self.filetypes = ['javascript']
         self.min_pattern_length = 2
         self.rank = 10000
-        self.input_pattern = '((?:\.|(?:,|:|->)\s+)\w*|\()'
+        # self.input_pattern = '((?:\.|(?:,|:|->)\s+)\w*|\()'
+        self.input_pattern = (r'\.\w*$|^\s*@\w*$|' + import_re)
         self._relatives = {}
         self._config_dirs = {}
         self.__completer = Completer(vim)
@@ -39,7 +46,7 @@ class Source(Base):
                 pass
 
     def get_complete_position(self, context):
-        return self.__completer.determineCompletionPosition(context)
+        return self.__completer.get_complete_position(context)
 
     def gather_candidates(self, context):
         rel, cfg_dir = self.relative()
@@ -56,25 +63,24 @@ class Source(Base):
         self._config_dirs[filename] = config_dir
         return (filename, config_dir)
 
+
 class Completer(object):
     def __init__(self, vim):
-        import re
         self.__vim = vim
-        self.__completion_pattern = re.compile('\w*$')
 
-    def get_flowbin(self):
-        return self.__vim.vars['autocomplete_flow#flowbin']
+    def on_init(self, context):
+        vars = context['vars']
+        self.__flowbin = vars.get('autocomplete_flow#flowbin', 'flow')
 
-    def determineCompletionPosition(self, context):
-        result = self.__completion_pattern.search(context['input'])
+    def get_complete_position(self, context):
+        m = import_pattern.search(context['input'])
+        if m:
+            # need to tell from what position autocomplete as
+            # needs to autocomplete from start quote return that
+            return re.search(r'["\']', context['input']).start()
 
-        if result is None:
-            return self.__vim.current.window.cursor.col
-
-        return result.start()
-
-    def abbreviateIfNeeded(self, text):
-        return (text[:47] + '...') if len(text) > 50 else text
+        m = re.search(r'\w*$', context['input'])
+        return m.start() if m else -1
 
     def buildCompletionWord(self, json):
 
@@ -82,30 +88,26 @@ class Completer(object):
         if not json['func_details']:
             return json['name']
 
-        # If not using neosnippet
-        if not self.__vim.vars.get('neosnippet#enable_completed_snippet'):
-            if self.__vim.vars.get('autocomplete_flow#insert_paren_after_function'):
-                return json['name'] + '('
-            else:
-                return json['name']
+        return json['name']
 
         def buildArgumentList(arg):
             index, paramDesc = arg
             return '<`' + str(index) + ':' + paramDesc['name'] + '`>'
 
-        params = map(buildArgumentList, enumerate(json['func_details']['params']))
-        return json['name'] + '(' + ', '.join(params) + ')'
+            params = map(buildArgumentList, enumerate(json['func_details']['params']))
+            return json['name'] + '(' + ', '.join(params) + ')'
 
     def find_candidates(self, context, relative, config_dir):
         from subprocess import Popen, PIPE
         import json
 
-        line = str(self.__vim.current.window.cursor[0])
-        column = str(self.__vim.current.window.cursor[1] + 1)
+        line = context['position'][1]
+        col = context['complete_position']
+
         if relative:
-            command = [self.get_flowbin(), 'autocomplete', '--json', relative, line, column]
+            command = [self.__flowbin, 'autocomplete', '--json', relative, line, col]
         else:
-            command = [self.get_flowbin(), 'autocomplete', '--json', line, column]
+            command = [self.__flowbin, 'autocomplete', '--json', line, col]
 
         buf = '\n'.join(self.__vim.current.buffer[:])
 
@@ -120,8 +122,8 @@ class Completer(object):
 
             return [{
                 'word': self.buildCompletionWord(x),
-                'abbr': self.abbreviateIfNeeded(x['name']),
+                'abbr': x['name'],
                 'info': x['type'],
-                'kind': self.abbreviateIfNeeded(x['type'])} for x in results['result']]
+                'kind': x['type']} for x in results['result']]
         except FileNotFoundError:
             pass
