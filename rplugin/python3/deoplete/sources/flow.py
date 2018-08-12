@@ -2,14 +2,9 @@
 # coding: utf-8
 
 import os
-import re
 from .base import Base
 
 CONFIG_FILE = '.flowconfig'
-
-import_re = r'=?\s*require\(["\'"][@?\w\./-]*$|\s+from\s+["\'][@?\w\./-]*$'
-import_pattern = re.compile(import_re)
-
 
 # Find closest configuration directory recursively.
 # Borrows from https://github.com/steelsojka/deoplete-flow/pull/9/files
@@ -30,8 +25,7 @@ class Source(Base):
         self.filetypes = ['javascript']
         self.min_pattern_length = 2
         self.rank = 10000
-        # self.input_pattern = '((?:\.|(?:,|:|->)\s+)\w*|\()'
-        self.input_pattern = (r'\.\w*$|^\s*@\w*$|' + import_re)
+        self.input_pattern = '((?:\.|(?:,|:|->)\s+)\w*|\()'
         self._relatives = {}
         self._config_dirs = {}
         self.__completer = Completer(vim)
@@ -46,7 +40,7 @@ class Source(Base):
                 pass
 
     def get_complete_position(self, context):
-        return self.__completer.get_complete_position(context)
+        return self.__completer.determineCompletionPosition(context)
 
     def gather_candidates(self, context):
         rel, cfg_dir = self.relative()
@@ -63,24 +57,20 @@ class Source(Base):
         self._config_dirs[filename] = config_dir
         return (filename, config_dir)
 
-
 class Completer(object):
     def __init__(self, vim):
+        import re
         self.__vim = vim
+        self.__flowbin = vim.vars['autocomplete_flow#flowbin']
+        self.__completion_pattern = re.compile('\w*$')
 
-    def on_init(self, context):
-        vars = context['vars']
-        self.__flowbin = vars.get('autocomplete_flow#flowbin', 'flow')
+    def determineCompletionPosition(self, context):
+        result = self.__completion_pattern.search(context['input'])
 
-    def get_complete_position(self, context):
-        m = import_pattern.search(context['input'])
-        if m:
-            # need to tell from what position autocomplete as
-            # needs to autocomplete from start quote return that
-            return re.search(r'["\']', context['input']).start()
+        if result is None:
+            return self.__vim.current.window.cursor.col
 
-        m = re.search(r'\w*$', context['input'])
-        return m.start() if m else -1
+        return result.start()
 
     def buildCompletionWord(self, json):
 
@@ -101,13 +91,12 @@ class Completer(object):
         from subprocess import Popen, PIPE
         import json
 
-        line = context['position'][1]
-        col = context['complete_position']
-
+        line = str(self.__vim.current.window.cursor[0])
+        column = str(self.__vim.current.window.cursor[1] + 1)
         if relative:
-            command = [self.__flowbin, 'autocomplete', '--json', relative, line, col]
+            command = [self.__flowbin, 'autocomplete', '--json', relative, line, column]
         else:
-            command = [self.__flowbin, 'autocomplete', '--json', line, col]
+            command = [self.__flowbin, 'autocomplete', '--json', line, column]
 
         buf = '\n'.join(self.__vim.current.buffer[:])
 
